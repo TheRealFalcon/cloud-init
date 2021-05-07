@@ -792,7 +792,27 @@ class Distro(persistence.CloudInitPickleMixin, metaclass=abc.ABCMeta):
         return args
 
 
-def _apply_hostname_transformations_to_url(url: str, transformations: list):
+def _apply_transformations(url_snippet, transformations):
+    """Apply given transformations to url or url snippet.
+
+    Returns the new url or url part with the given transformations applied.
+    If any transformation returns None, an empty string is returned.
+    """
+    new_hostname = url_snippet
+    for transformation in transformations:
+        new_hostname = transformation(new_hostname)
+        if new_hostname is None:
+            # If a transformation returns None, that indicates we should abort
+            # processing
+            return ''
+    return new_hostname
+
+
+def _apply_transformations_to_url(
+    url: str,
+    pre_split_transformations: list,
+    post_split_transformations: list
+):
     """
     Apply transformations to a URL's hostname, return transformed URL.
 
@@ -801,16 +821,20 @@ def _apply_hostname_transformations_to_url(url: str, transformations: list):
 
     :param url:
         The URL to operate on.
-    :param transformations:
+    : param pre_split_transformations
+        A list of ``(str) -> Optional[str]`` functions which will be applied
+        in order to the entire URL before being split into its component parts
+    :param post_split_transformations:
         A list of ``(str) -> Optional[str]`` functions, which will be applied
         in order to the hostname portion of the URL.  If any function
         (regardless of ordering) returns None, ``url`` will be returned without
-        any modification.
+        any these modifications having been applied.
 
     :return:
         A string whose value is ``url`` with the hostname ``transformations``
         applied, or ``None`` if ``url`` is unparseable.
     """
+    url = _apply_transformations(url, pre_split_transformations)
     try:
         parts = urllib.parse.urlsplit(url)
     except ValueError:
@@ -822,12 +846,15 @@ def _apply_hostname_transformations_to_url(url: str, transformations: list):
         # transform it, and (b) it won't work as a mirror; return None.
         return None
 
-    for transformation in transformations:
-        new_hostname = transformation(new_hostname)
-        if new_hostname is None:
-            # If a transformation returns None, that indicates we should abort
-            # processing and return `url` unmodified
-            return url
+    new_hostname = _apply_transformations(
+        new_hostname,
+        post_split_transformations
+    )
+
+    if not new_hostname:
+        # No hostname indicates processing was aborting and we should
+        # return the original url
+        return url
 
     new_netloc = new_hostname
     if parts.port is not None:
@@ -874,7 +901,16 @@ def _sanitize_mirror_url(url: str):
     """
     # Acceptable characters are LDH characters, plus "." to separate each label
     acceptable_chars = LDH_ASCII_CHARS + "."
-    transformations = [
+
+    # These need to be done before we split the url or they won't be replaced
+    # correctly. See https://bugs.python.org/issue43882
+    security_removed_chars = '\r\t\n'
+
+    pre_split_transformations = [
+        lambda hostname: hostname.replace(security_removed_chars, '-')
+    ]
+
+    post_split_transformations = [
         # This is an IP address, not a hostname, so no need to apply the
         # transformations
         lambda hostname: None if net.is_ip_address(hostname) else hostname,
@@ -894,7 +930,11 @@ def _sanitize_mirror_url(url: str):
         ),
     ]
 
-    return _apply_hostname_transformations_to_url(url, transformations)
+    return _apply_transformations_to_url(
+        url,
+        pre_split_transformations,
+        post_split_transformations
+    )
 
 
 def _get_package_mirror_info(mirror_info, data_source=None,
