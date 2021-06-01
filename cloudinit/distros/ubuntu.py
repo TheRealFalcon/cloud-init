@@ -8,12 +8,15 @@
 # Author: Ben Howard <ben.howard@canonical.com>
 #
 # This file is part of cloud-init. See LICENSE file for license information.
+import copy
+import logging
 
+from cloudinit import util
 from cloudinit.distros import debian
 from cloudinit.distros import PREFERRED_NTP_CLIENTS
-from cloudinit import util
+from cloudinit import subp
 
-import copy
+LOG = logging.getLogger(__name__)
 
 
 class Distro(debian.Distro):
@@ -45,6 +48,20 @@ class Distro(debian.Distro):
                 self._preferred_ntp_clients = (
                     copy.deepcopy(PREFERRED_NTP_CLIENTS))
         return self._preferred_ntp_clients
+
+    def _bring_up_interface(self, device_name):
+        cmd = 'ip link set {} up'.format(device_name).split()
+        LOG.debug("Attempting to run bring up interface %s using command %s",
+                  device_name, cmd)
+        try:
+            (_out, err) = subp.subp(cmd)
+            if len(err):
+                LOG.warning("Running %s resulted in stderr output: %s",
+                            cmd, err)
+            return True
+        except subp.ProcessExecutionError:
+            util.logexc(LOG, "Running interface command %s failed", cmd)
+            return False
 
 
 # vi: ts=4 expandtab

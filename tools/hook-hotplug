@@ -1,0 +1,34 @@
+#!/bin/bash
+# This file is part of cloud-init. See LICENSE file for license information.
+
+# This script checks if cloud-init has hotplug hooked and if
+# cloud-init has finished; if so invoke cloud-init hotplug-hook
+
+# TODO: GET RID OF THESE :)
+echo 'Im running!' > /var/tmp/running
+echo "DEVPATH: ${DEVPATH}" >> /var/tmp/bbb
+echo "SUBSYSTEM: ${SUBSYSTEM}" >> /var/tmp/bbb
+echo "ACTION: ${ACTION}" >> /var/tmp/bbb
+
+
+is_finished() {
+    [ -e /run/cloud-init/result.json ]
+}
+
+if is_finished; then
+    # only hook pci devices at this time
+    # case "${DEVPATH}" in
+    #     /devices/pci*)
+    # open cloud-init's hotplug-hook fifo rw
+    echo 'do cool stuff' >> /var/tmp/bbb
+    exec 3<>/run/cloud-init/hook-hotplug-cmd
+    env_params=(
+        --devpath="${DEVPATH}"
+        --subsystem="${SUBSYSTEM}"
+        --udevaction="${ACTION}"
+    )
+    # write params to cloud-init's hotplug-hook fifo
+    echo "--hotplug-debug " "${env_params[@]}" >&3
+    # ;;
+    # esac
+fi

@@ -121,9 +121,9 @@ class Distro(distros.Distro):
             if d == 'all':
                 use_all = True
         if use_all:
-            return distros.Distro._bring_up_interface(self, '--all')
+            return self._bring_up_interface('--all')
         else:
-            return distros.Distro._bring_up_interfaces(self, device_names)
+            return super()._bring_up_interfaces(device_names)
 
     def _write_hostname(self, your_hostname, out_fn):
         conf = None

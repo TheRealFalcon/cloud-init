@@ -13,9 +13,10 @@ import os
 
 from cloudinit import dmi
 from cloudinit import log as logging
-from cloudinit.net import eni
+from cloudinit.event import EventScope, EventType
 from cloudinit import sources
 from cloudinit import util
+from cloudinit.net import eni
 
 LOG = logging.getLogger(__name__)
 
@@ -23,6 +24,13 @@ LOG = logging.getLogger(__name__)
 class DataSourceNoCloud(sources.DataSource):
 
     dsname = "NoCloud"
+    # TODO: DO WE ACTUALLY WANT THIS?
+    supported_update_events = {EventScope.NETWORK: {
+        EventType.BOOT_NEW_INSTANCE,
+        EventType.BOOT,
+        EventType.BOOT_LEGACY,
+        EventType.HOTPLUG,
+    }}
 
     def __init__(self, sys_cfg, distro, paths):
         sources.DataSource.__init__(self, sys_cfg, distro, paths)
