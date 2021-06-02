@@ -7,6 +7,7 @@ import os
 import six
 import sys
 import time
+from os.path import basename
 
 from cloudinit.event import EventScope, EventType
 from cloudinit import log
@@ -106,8 +107,11 @@ class NetHandler(UeventHandler):
         self.id = devpath_to_macaddr(self.devpath)
 
     def apply(self):
-        return self.datasource.distro.apply_network_config(self.config,
-                                                           bring_up=True)
+        return self.datasource.distro.apply_network_config(
+            self.config,
+            bring_up=True,
+            devices=[os.path.basename(self.devpath)],
+        )
 
     @property
     def config(self):

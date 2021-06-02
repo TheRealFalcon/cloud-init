@@ -14,6 +14,7 @@ import os
 import re
 import stat
 import string
+from typing import Iterable
 import urllib.parse
 from io import StringIO
 
@@ -204,8 +205,17 @@ class Distro(persistence.CloudInitPickleMixin, metaclass=abc.ABCMeta):
     def generate_fallback_config(self):
         return net.generate_fallback_config()
 
-    def apply_network_config(self, netconfig, bring_up=False):
-        # apply network config netconfig
+    def apply_network_config(
+        self, netconfig, bring_up=False, devices: Iterable[str] = None
+    ):
+        """Apply the network config.
+
+        If bring_up is True, attempt to bring up the passed in devices. If
+        devices is None, attempt to bring up devices returned by
+        _write_network_config.
+
+        Returns True if any devices failed to come up, otherwise False.
+        """
         # This method is preferred to apply_network which only takes
         # a much less complete network config format (interfaces(5)).
         try:
@@ -217,7 +227,8 @@ class Distro(persistence.CloudInitPickleMixin, metaclass=abc.ABCMeta):
 
         # Now try to bring them up
         if bring_up:
-            return self._bring_up_interfaces(dev_names)
+            devs = devices if devices else dev_names
+            return self._bring_up_interfaces(devs)
         return False
 
     def apply_network_config_names(self, netconfig):
@@ -406,7 +417,7 @@ class Distro(persistence.CloudInitPickleMixin, metaclass=abc.ABCMeta):
             util.logexc(LOG, "Running interface command %s failed", cmd)
             return False
 
-    def _bring_up_interfaces(self, device_names):
+    def _bring_up_interfaces(self, device_names: Iterable[str]) -> bool:
         am_failed = 0
         for d in device_names:
             if not self._bring_up_interface(d):
