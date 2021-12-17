@@ -8,62 +8,17 @@
 
 """Byobu: Enable/disable byobu system wide and for default user."""
 
-from cloudinit import subp, util
-from cloudinit.config.schema import get_meta_doc, validate_cloudconfig_schema
+from pathlib import Path
+
+from cloudinit import safeyaml, subp, util
+from cloudinit.config.schema import (
+    get_meta_doc,
+    parse_schema_file,
+    validate_cloudconfig_schema,
+)
 from cloudinit.distros import ug_util
-from cloudinit.settings import PER_INSTANCE
 
-MODULE_DESCRIPTION = """\
-This module controls whether byobu is enabled or disabled system wide and for
-the default system user. If byobu is to be enabled, this module will ensure it
-is installed. Likewise, if it is to be disabled, it will be removed if
-installed.
-
-Valid configuration options for this module are:
-
-  - ``enable-system``: enable byobu system wide
-  - ``enable-user``: enable byobu for the default user
-  - ``disable-system``: disable byobu system wide
-  - ``disable-user``: disable byobu for the default user
-  - ``enable``: enable byobu both system wide and for default user
-  - ``disable``: disable byobu for all users
-  - ``user``: alias for ``enable-user``
-  - ``system``: alias for ``enable-system``
-"""
-distros = ["ubuntu", "debian"]
-
-meta = {
-    "id": "cc_byobu",
-    "name": "Byobu",
-    "title": "Enable/disable byobu system wide and for default user",
-    "description": MODULE_DESCRIPTION,
-    "distros": distros,
-    "frequency": PER_INSTANCE,
-    "examples": [
-        "byobu_by_default: enable-user",
-        "byobu_by_default: disable-system",
-    ],
-}
-
-schema = {
-    "type": "object",
-    "properties": {
-        "byobu_by_default": {
-            "type": "string",
-            "enum": [
-                "enable-system",
-                "enable-user",
-                "disable-system",
-                "disable-user",
-                "enable",
-                "disable",
-                "user",
-                "system",
-            ],
-        }
-    },
-}
-
+meta, schema = parse_schema_file("cc_byobu")
 __doc__ = get_meta_doc(meta, schema)
 
 

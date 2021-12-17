@@ -228,7 +228,11 @@ class TestCloudConfigExamples:
         """For a given example in a config module we test if it is valid
         according to the unified schema of all config modules
         """
-        config_load = safe_load(example)
+        try:
+            config_load = safe_load(example)
+        except AttributeError:
+            # Dictionary of examples was defined directly in schema yaml
+            config_load = example
         validate_cloudconfig_schema(
             config_load, self.schema[schema_id], strict=True
         )

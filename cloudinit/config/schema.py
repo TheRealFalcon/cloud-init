@@ -1,6 +1,5 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 """schema.py: Set of module functions for processing cloud-config schema."""
-
 import argparse
 import logging
 import os
@@ -9,10 +8,12 @@ import sys
 from collections import defaultdict
 from copy import deepcopy
 from functools import partial
+from pathlib import Path
+from typing import Tuple
 
 import yaml
 
-from cloudinit import importer
+from cloudinit import importer, safeyaml
 from cloudinit.cmd.devel import read_cfg_paths
 from cloudinit.importer import MetaSchema
 from cloudinit.util import error, find_modules, load_file
@@ -499,6 +500,7 @@ def _get_examples(meta: MetaSchema) -> str:
     rst_content = SCHEMA_EXAMPLES_HEADER
     for count, example in enumerate(examples):
         # Python2.6 is missing textwrapper.indent
+        example = str(example)
         lines = example.split("\n")
         indented_lines = ["    {0}".format(line) for line in lines]
         if rst_content != SCHEMA_EXAMPLES_HEADER:
@@ -619,6 +621,18 @@ def get_meta() -> dict:
             mod = importer.import_module(mod_locs[0])
             full_meta[mod.meta["id"]] = mod.meta
     return full_meta
+
+
+def parse_schema_file(module_name: str) -> Tuple[dict, dict]:
+    """Return defined schema for module.
+
+    Example:
+      meta, schema = parse_schema_file('cc_foo')
+    """
+    schema_file = Path(__file__).parent / "schemas" / f"{module_name}.yaml"
+    with open(schema_file) as f:
+        schema = safeyaml.load(f)
+    return schema["meta"], schema["schema"]
 
 
 def get_parser(parser=None):
