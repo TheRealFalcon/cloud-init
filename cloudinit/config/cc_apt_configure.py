@@ -16,21 +16,22 @@ import re
 from cloudinit import gpg
 from cloudinit import log as logging
 from cloudinit import subp, templater, util
-from cloudinit.config.schema import get_meta_doc, validate_cloudconfig_schema
-from cloudinit.config.schemas.apt_configure import (
-    ADD_APT_REPO_MATCH,
-    meta,
-    schema,
+from cloudinit.config.schema import (
+    get_meta_doc,
+    parse_schema_file,
+    validate_cloudconfig_schema,
 )
+from cloudinit.config.schemas.apt_configure import ADD_APT_REPO_MATCH
+
+meta, schema = parse_schema_file("cc_apt_configure")
+__doc__ = get_meta_doc(meta, schema)
+
 
 LOG = logging.getLogger(__name__)
 
 APT_LOCAL_KEYS = "/etc/apt/trusted.gpg"
 APT_TRUSTED_GPG_DIR = "/etc/apt/trusted.gpg.d/"
 CLOUD_INIT_GPG_DIR = "/etc/apt/cloud-init.gpg.d/"
-
-__doc__ = get_meta_doc(meta, schema)
-
 
 # place where apt stores cached repository data
 APT_LISTS = "/var/lib/apt/lists"

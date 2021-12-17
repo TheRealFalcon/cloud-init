@@ -10,6 +10,7 @@ from copy import copy
 from pathlib import Path
 from textwrap import dedent
 
+import jsonschema
 import pytest
 from yaml import safe_load
 
