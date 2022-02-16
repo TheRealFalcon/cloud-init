@@ -34,7 +34,7 @@ import time
 from base64 import b64decode, b64encode
 from errno import ENOENT
 from functools import lru_cache
-from typing import List
+from typing import List, overload
 from urllib import parse
 
 from cloudinit import importer
@@ -49,6 +49,11 @@ from cloudinit import (
     version,
 )
 from cloudinit.settings import CFG_BUILTIN
+
+try:
+    from typing import Literal
+except ImportError:
+    pass
 
 _DNS_REDIRECT_IP = None
 LOG = logging.getLogger(__name__)
@@ -1441,6 +1446,20 @@ def uniq_list(in_list):
         else:
             out_list.append(i)
     return out_list
+
+
+@overload
+def load_file(
+    fname, read_cb=None, quiet=False, decode: "Literal[True]" = True
+) -> str:
+    ...
+
+
+@overload
+def load_file(
+    fname, read_cb=None, quiet=False, decode: "Literal[False]" = False
+) -> bytes:
+    ...
 
 
 def load_file(fname, read_cb=None, quiet=False, decode=True):

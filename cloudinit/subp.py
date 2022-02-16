@@ -4,7 +4,15 @@
 import logging
 import os
 import subprocess
+import sys
 from errno import ENOEXEC
+from typing import AnyStr, Tuple, Union, cast, overload
+
+# if sys.version_info >= (3, 8):
+#     from typing import Literal
+# else:
+#     from cloudinit.typing_extensions import Literal
+from cloudinit.typing_extensions import Literal
 
 LOG = logging.getLogger(__name__)
 
@@ -70,58 +78,32 @@ class ProcessExecutionError(IOError):
         "Stdout: %(stdout)s\n"
         "Stderr: %(stderr)s"
     )
-    empty_attr = "-"
 
     def __init__(
         self,
         stdout=None,
         stderr=None,
         exit_code=None,
-        cmd=None,
+        cmd="-",
         description=None,
-        reason=None,
+        reason="-",
         errno=None,
     ):
-        if not cmd:
-            self.cmd = self.empty_attr
-        else:
-            self.cmd = cmd
+        self.stdout = self._indent_text(stdout) if stdout is not None else "-"
+        self.stderr = self._indent_text(stderr) if stderr is not None else "-"
+        self.cmd = cmd
 
-        if not description:
-            if not exit_code and errno == ENOEXEC:
-                self.description = "Exec format error. Missing #! in script?"
-            else:
-                self.description = "Unexpected error while running command."
-        else:
+        if description:
             self.description = description
-
-        if not isinstance(exit_code, int):
-            self.exit_code = self.empty_attr
+        elif not exit_code and errno == ENOEXEC:
+            self.description = "Exec format error. Missing #! in script?"
         else:
-            self.exit_code = exit_code
+            self.description = "Unexpected error while running command."
 
-        if not stderr:
-            if stderr is None:
-                self.stderr = self.empty_attr
-            else:
-                self.stderr = stderr
-        else:
-            self.stderr = self._indent_text(stderr)
-
-        if not stdout:
-            if stdout is None:
-                self.stdout = self.empty_attr
-            else:
-                self.stdout = stdout
-        else:
-            self.stdout = self._indent_text(stdout)
-
-        if reason:
-            self.reason = reason
-        else:
-            self.reason = self.empty_attr
-
-        self.errno = errno
+        self.exit_code = exit_code or "-"
+        self.reason = reason
+        if errno:
+            self.errno = errno
         message = self.MESSAGE_TMPL % {
             "description": self._ensure_string(self.description),
             "cmd": self._ensure_string(self.cmd),
@@ -138,19 +120,78 @@ class ProcessExecutionError(IOError):
         """
         return text.decode() if isinstance(text, bytes) else text
 
-    def _indent_text(self, text, indent_level=8):
+    def _indent_text(self, text: AnyStr, indent_level=8) -> Union[str, bytes]:
         """
         indent text on all but the first line, allowing for easy to read output
         """
-        cr = "\n"
-        indent = " " * indent_level
-        # if input is bytes, return bytes
-        if isinstance(text, bytes):
-            cr = cr.encode()
-            indent = indent.encode()
+        if isinstance(text, str):
+            cr = "\n"
+            indent = " " * indent_level
+        else:
+            cr = b"\n"
+            indent = b" " * indent_level
         # remove any newlines at end of text first to prevent unneeded blank
         # line in output
-        return text.rstrip(cr).replace(cr, cr + indent)
+        return text.rstrip(cast(AnyStr, cr)).replace(
+            cast(AnyStr, cr), cr + indent
+        )
+
+
+@overload
+def subp(
+    args,
+    data=None,
+    rcs=None,
+    env=None,
+    capture: "Literal[True]" = True,
+    combine_capture=False,
+    shell=False,
+    logstring=False,
+    decode: str = "replace",
+    target=None,
+    update_env=None,
+    status_cb=None,
+    cwd=None,
+) -> Tuple[str, str]:
+    ...
+
+
+@overload
+def subp(
+    args,
+    data=None,
+    rcs=None,
+    env=None,
+    capture: "Literal[True]" = True,
+    combine_capture=False,
+    shell=False,
+    logstring=False,
+    decode: "Literal[False]" = False,
+    target=None,
+    update_env=None,
+    status_cb=None,
+    cwd=None,
+) -> Tuple[bytes, bytes]:
+    ...
+
+
+@overload
+def subp(
+    args,
+    data=None,
+    rcs=None,
+    env=None,
+    capture: "Literal[False]" = False,
+    combine_capture=False,
+    shell=False,
+    logstring=False,
+    decode="replace",
+    target=None,
+    update_env=None,
+    status_cb=None,
+    cwd=None,
+) -> Tuple[None, None]:
+    ...
 
 
 def subp(

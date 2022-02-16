@@ -11,7 +11,8 @@ import ipaddress
 import logging
 import os
 import re
-from typing import Any, Dict
+from collections import namedtuple
+from typing import Any, Callable, Dict, List
 
 from cloudinit import subp, util
 from cloudinit.net.network_state import ipv4_mask_to_net_prefix
@@ -33,6 +34,7 @@ OVS_INTERNAL_INTERFACE_LOOKUP_CMD = [
     "interface",
     "type=internal",
 ]
+Interface = namedtuple("Interface", "name mac driver device_id")
 
 
 def natural_sort_key(s, _nsre=re.compile("([0-9]+)")):
@@ -182,7 +184,7 @@ def get_ovs_internal_interfaces() -> list:
     try:
         out, _err = subp.subp(OVS_INTERNAL_INTERFACE_LOOKUP_CMD)
     except subp.ProcessExecutionError as exc:
-        if "database connection failed" in exc.stderr:
+        if "database connection failed" in exc.stderr:  # type: ignore
             LOG.info(
                 "Open vSwitch is not yet up; no interfaces will be detected as"
                 " OVS-internal"
@@ -526,9 +528,7 @@ def generate_fallback_config(blacklist_drivers=None, config_driver=None):
     if is_netfail_master(target_name):
         match = {"name": target_name}
     else:
-        match = {
-            "macaddress": read_sys_net_safe(target_name, "address").lower()
-        }
+        match = {"macaddress": read_sys_net(target_name, "address").lower()}
     cfg = {"dhcp4": True, "set-name": target_name, "match": match}
     if config_driver:
         driver = device_driver(target_name)
@@ -806,7 +806,7 @@ def _rename_interfaces(
         cur_byname = update_byname(cur_info)
         ops += cur_ops
 
-    opmap = {"rename": rename, "down": down, "up": up}
+    opmap: Dict[str, Callable] = {"rename": rename, "down": down, "up": up}
 
     if len(ops) + len(ups) == 0:
         if len(errors):
@@ -818,7 +818,7 @@ def _rename_interfaces(
 
         for op, mac, new_name, params in ops + ups:
             try:
-                opmap.get(op)(*params)
+                opmap[op](*params)
             except Exception as e:
                 errors.append(
                     "[unknown] Error performing %s%s for %s, %s: %s"
@@ -872,7 +872,7 @@ def get_interfaces_by_mac(blacklist_drivers=None) -> dict:
         )
 
 
-def get_interfaces_by_mac_on_freebsd(blacklist_drivers=None) -> dict():
+def get_interfaces_by_mac_on_freebsd(blacklist_drivers=None) -> dict:
     (out, _) = subp.subp(["ifconfig", "-a", "ether"])
 
     # flatten each interface block in a single line
@@ -900,7 +900,7 @@ def get_interfaces_by_mac_on_freebsd(blacklist_drivers=None) -> dict():
     return results
 
 
-def get_interfaces_by_mac_on_netbsd(blacklist_drivers=None) -> dict():
+def get_interfaces_by_mac_on_netbsd(blacklist_drivers=None) -> dict:
     ret = {}
     re_field_match = (
         r"(?P<ifname>\w+).*address:\s"
@@ -916,7 +916,7 @@ def get_interfaces_by_mac_on_netbsd(blacklist_drivers=None) -> dict():
     return ret
 
 
-def get_interfaces_by_mac_on_openbsd(blacklist_drivers=None) -> dict():
+def get_interfaces_by_mac_on_openbsd(blacklist_drivers=None) -> dict:
     ret = {}
     re_field_match = (
         r"(?P<ifname>\w+).*lladdr\s"
@@ -959,11 +959,11 @@ def get_interfaces_by_mac_on_linux(blacklist_drivers=None) -> dict:
     return ret
 
 
-def get_interfaces(blacklist_drivers=None) -> list:
+def get_interfaces(blacklist_drivers=None) -> List[Interface]:
     """Return list of interface tuples (name, mac, driver, device_id)
 
     Bridges and any devices that have a 'stolen' mac are excluded."""
-    ret = []
+    interfaces = []
     if blacklist_drivers is None:
         blacklist_drivers = []
     devs = get_devicelist()
@@ -998,8 +998,8 @@ def get_interfaces(blacklist_drivers=None) -> list:
         driver = device_driver(name)
         if driver in blacklist_drivers:
             continue
-        ret.append((name, mac, driver, device_devid(name)))
-    return ret
+        interfaces.append(Interface(name, mac, driver, device_devid(name)))
+    return interfaces
 
 
 def get_ib_hwaddrs_by_interface():
@@ -1217,7 +1217,7 @@ class EphemeralIPv4Network(object):
                 update_env={"LANG": "C"},
             )
         except subp.ProcessExecutionError as e:
-            if "File exists" not in e.stderr:
+            if "File exists" not in e.stderr:  # type: ignore
                 raise
             LOG.debug(
                 "Skip ephemeral network setup, %s already has address %s",
