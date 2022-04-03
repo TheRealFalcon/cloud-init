@@ -24,7 +24,7 @@ flake8:
 	@$(CWD)/tools/run-flake8
 
 unittest: clean_pyc
-	python3 -m pytest -v tests/unittests cloudinit
+	tox -re py3
 
 ci-deps-ubuntu:
 	@$(PYTHON) $(CWD)/tools/read-dependencies --distro ubuntu --test-distro
