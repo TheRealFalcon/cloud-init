@@ -5,8 +5,8 @@
 import os
 
 from cloudinit import distros
-from cloudinit.distros import netbsd
 from cloudinit import log as logging
+from cloudinit.distros import netbsd
 
 LOG = logging.getLogger(__name__)
 

@@ -7,8 +7,8 @@ import os
 import platform
 
 from cloudinit import distros
-from cloudinit.distros import bsd
 from cloudinit import log as logging
+from cloudinit.distros import bsd
 
 LOG = logging.getLogger(__name__)
 

@@ -9,8 +9,8 @@ import re
 from io import StringIO
 
 from cloudinit import distros
-from cloudinit.distros import bsd
 from cloudinit import log as logging
+from cloudinit.distros import bsd
 from cloudinit.distros.networking import FreeBSDNetworking
 from cloudinit.settings import PER_INSTANCE
 
