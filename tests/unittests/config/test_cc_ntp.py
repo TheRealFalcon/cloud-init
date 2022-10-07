@@ -434,6 +434,7 @@ class TestNtp(FilesystemMockingTestCase):
         """Test enabled config renders template, and restarts service"""
         cfg = {"ntp": {"enabled": True}}
         for distro in cc_ntp.distros:
+            m_dsubp.reset_mock()
             mycloud = self._get_cloud(distro)
             ntpconfig = self._mock_ntp_client_config(distro=distro)
             confpath = ntpconfig["confpath"]

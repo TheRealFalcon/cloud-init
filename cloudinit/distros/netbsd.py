@@ -6,14 +6,14 @@ import crypt
 import os
 import platform
 
-import cloudinit.distros.bsd
+from cloudinit import distros
+from cloudinit.distros import bsd
 from cloudinit import log as logging
-from cloudinit import subp, util
 
 LOG = logging.getLogger(__name__)
 
 
-class NetBSD(cloudinit.distros.bsd.BSD):
+class NetBSD(bsd.BSD):
     """
     Distro subclass for NetBSD.
 
@@ -38,7 +38,7 @@ class NetBSD(cloudinit.distros.bsd.BSD):
         return ["usermod", "-G", group_name, member_name]
 
     def add_user(self, name, **kwargs):
-        if util.is_user(name):
+        if distros.util.is_user(name):
             LOG.info("User %s already exists, skipping.", name)
             return False
 
@@ -76,9 +76,9 @@ class NetBSD(cloudinit.distros.bsd.BSD):
         # Run the command
         LOG.info("Adding user %s", name)
         try:
-            subp.subp(adduser_cmd, logstring=log_adduser_cmd)
+            distros.subp.subp(adduser_cmd, logstring=log_adduser_cmd)
         except Exception:
-            util.logexc(LOG, "Failed to create user %s", name)
+            distros.util.logexc(LOG, "Failed to create user %s", name)
             raise
         # Set the password if it is provided
         # For security consideration, only hashed passwd is assumed
@@ -94,31 +94,33 @@ class NetBSD(cloudinit.distros.bsd.BSD):
             hashed_pw = crypt.crypt(passwd, crypt.mksalt(method))
 
         try:
-            subp.subp(["usermod", "-p", hashed_pw, user])
+            distros.subp.subp(["usermod", "-p", hashed_pw, user])
         except Exception:
-            util.logexc(LOG, "Failed to set password for %s", user)
+            distros.util.logexc(LOG, "Failed to set password for %s", user)
             raise
         self.unlock_passwd(user)
 
     def force_passwd_change(self, user):
         try:
-            subp.subp(["usermod", "-F", user])
+            distros.subp.subp(["usermod", "-F", user])
         except Exception:
-            util.logexc(LOG, "Failed to set pw expiration for %s", user)
+            distros.util.logexc(
+                LOG, "Failed to set pw expiration for %s", user
+            )
             raise
 
     def lock_passwd(self, name):
         try:
-            subp.subp(["usermod", "-C", "yes", name])
+            distros.subp.subp(["usermod", "-C", "yes", name])
         except Exception:
-            util.logexc(LOG, "Failed to lock user %s", name)
+            distros.util.logexc(LOG, "Failed to lock user %s", name)
             raise
 
     def unlock_passwd(self, name):
         try:
-            subp.subp(["usermod", "-C", "no", name])
+            distros.subp.subp(["usermod", "-C", "no", name])
         except Exception:
-            util.logexc(LOG, "Failed to unlock user %s", name)
+            distros.util.logexc(LOG, "Failed to unlock user %s", name)
             raise
 
     def apply_locale(self, locale, out_fn=None):
@@ -143,6 +145,3 @@ class NetBSD(cloudinit.distros.bsd.BSD):
 
 class Distro(NetBSD):
     pass
-
-
-# vi: ts=4 expandtab
