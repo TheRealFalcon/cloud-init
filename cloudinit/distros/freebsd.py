@@ -8,8 +8,8 @@ import os
 import re
 from io import StringIO
 
-from cloudinit import distros
 from cloudinit import log as logging
+from cloudinit import subp, util
 from cloudinit.distros import bsd
 from cloudinit.distros.networking import FreeBSDNetworking
 from cloudinit.settings import PER_INSTANCE
@@ -57,13 +57,13 @@ class Distro(bsd.BSD):
             "status": [service, "status"],
         }
         cmd = list(init_cmd) + list(cmds[action])
-        return distros.subp.subp(cmd, capture=True)
+        return subp.subp(cmd, capture=True)
 
     def _get_add_member_to_group_cmd(self, member_name, group_name):
         return ["pw", "usermod", "-n", member_name, "-G", group_name]
 
     def add_user(self, name, **kwargs):
-        if distros.util.is_user(name):
+        if util.is_user(name):
             LOG.info("User %s already exists, skipping.", name)
             return False
 
@@ -109,9 +109,9 @@ class Distro(bsd.BSD):
         # Run the command
         LOG.info("Adding user %s", name)
         try:
-            distros.subp.subp(pw_useradd_cmd, logstring=log_pw_useradd_cmd)
+            subp.subp(pw_useradd_cmd, logstring=log_pw_useradd_cmd)
         except Exception:
-            distros.util.logexc(LOG, "Failed to create user %s", name)
+            util.logexc(LOG, "Failed to create user %s", name)
             raise
         # Set the password if it is provided
         # For security consideration, only hashed passwd is assumed
@@ -121,11 +121,9 @@ class Distro(bsd.BSD):
 
     def expire_passwd(self, user):
         try:
-            distros.subp.subp(["pw", "usermod", user, "-p", "01-Jan-1970"])
+            subp.subp(["pw", "usermod", user, "-p", "01-Jan-1970"])
         except Exception:
-            distros.util.logexc(
-                LOG, "Failed to set pw expiration for %s", user
-            )
+            util.logexc(LOG, "Failed to set pw expiration for %s", user)
             raise
 
     def set_passwd(self, user, passwd, hashed=False):
@@ -135,47 +133,47 @@ class Distro(bsd.BSD):
             hash_opt = "-h"
 
         try:
-            distros.subp.subp(
+            subp.subp(
                 ["pw", "usermod", user, hash_opt, "0"],
                 data=passwd,
                 logstring="chpasswd for %s" % user,
             )
         except Exception:
-            distros.util.logexc(LOG, "Failed to set password for %s", user)
+            util.logexc(LOG, "Failed to set password for %s", user)
             raise
 
     def lock_passwd(self, name):
         try:
-            distros.subp.subp(["pw", "usermod", name, "-h", "-"])
+            subp.subp(["pw", "usermod", name, "-h", "-"])
         except Exception:
-            distros.util.logexc(LOG, "Failed to lock user %s", name)
+            util.logexc(LOG, "Failed to lock user %s", name)
             raise
 
     def apply_locale(self, locale, out_fn=None):
         # Adjust the locales value to the new value
         newconf = StringIO()
-        for line in distros.util.load_file(self.login_conf_fn).splitlines():
+        for line in util.load_file(self.login_conf_fn).splitlines():
             newconf.write(
                 re.sub(r"^default:", r"default:lang=%s:" % locale, line)
             )
             newconf.write("\n")
 
         # Make a backup of login.conf.
-        distros.util.copy(self.login_conf_fn, self.login_conf_fn_bak)
+        util.copy(self.login_conf_fn, self.login_conf_fn_bak)
 
         # And write the new login.conf.
-        distros.util.write_file(self.login_conf_fn, newconf.getvalue())
+        util.write_file(self.login_conf_fn, newconf.getvalue())
 
         try:
             LOG.debug("Running cap_mkdb for %s", locale)
-            distros.subp.subp(["cap_mkdb", self.login_conf_fn])
-        except distros.subp.ProcessExecutionError:
+            subp.subp(["cap_mkdb", self.login_conf_fn])
+        except subp.ProcessExecutionError:
             # cap_mkdb failed, so restore the backup.
-            distros.util.logexc(LOG, "Failed to apply locale %s", locale)
+            util.logexc(LOG, "Failed to apply locale %s", locale)
             try:
-                distros.util.copy(self.login_conf_fn_bak, self.login_conf_fn)
+                util.copy(self.login_conf_fn_bak, self.login_conf_fn)
             except IOError:
-                distros.util.logexc(
+                util.logexc(
                     LOG, "Failed to restore %s backup", self.login_conf_fn
                 )
 

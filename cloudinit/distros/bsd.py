@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from cloudinit import distros, helpers
 from cloudinit import log as logging
+from cloudinit import net, subp, util
 from cloudinit.distros import bsd_utils
 from cloudinit.distros.networking import BSDNetworking
 
@@ -50,20 +51,20 @@ class BSD(distros.Distro):
         bsd_utils.set_rc_config_value("hostname", hostname, fn="/etc/rc.conf")
 
     def create_group(self, name, members=None):
-        if distros.util.is_group(name):
+        if util.is_group(name):
             LOG.warning("Skipping creation of existing group '%s'", name)
         else:
             group_add_cmd = self.group_add_cmd_prefix + [name]
             try:
-                distros.subp.subp(group_add_cmd)
+                subp.subp(group_add_cmd)
                 LOG.info("Created new group %s", name)
             except Exception:
-                distros.util.logexc(LOG, "Failed to create group %s", name)
+                util.logexc(LOG, "Failed to create group %s", name)
 
         if not members:
             members = []
         for member in members:
-            if not distros.util.is_user(member):
+            if not util.is_user(member):
                 LOG.warning(
                     "Unable to add group member '%s' to group '%s'"
                     "; user does not exist.",
@@ -72,18 +73,16 @@ class BSD(distros.Distro):
                 )
                 continue
             try:
-                distros.subp.subp(
-                    self._get_add_member_to_group_cmd(member, name)
-                )
+                subp.subp(self._get_add_member_to_group_cmd(member, name))
                 LOG.info("Added user '%s' to group '%s'", member, name)
             except Exception:
-                distros.util.logexc(
+                util.logexc(
                     LOG, "Failed to add user '%s' to group '%s'", member, name
                 )
 
     def generate_fallback_config(self):
         nconf = {"config": [], "version": 1}
-        for mac, name in distros.net.get_interfaces_by_mac().items():
+        for mac, name in net.get_interfaces_by_mac().items():
             nconf["config"].append(
                 {
                     "type": "physical",
@@ -124,11 +123,11 @@ class BSD(distros.Distro):
         elif args and isinstance(args, list):
             cmd.extend(args)
 
-        pkglist = distros.util.expand_package_list("%s-%s", pkgs)
+        pkglist = util.expand_package_list("%s-%s", pkgs)
         cmd.extend(pkglist)
 
         # Allow the output of this to flow outwards (ie not be captured)
-        distros.subp.subp(cmd, env=self._get_pkg_cmd_environ(), capture=False)
+        subp.subp(cmd, env=self._get_pkg_cmd_environ(), capture=False)
 
     def set_timezone(self, tz):
         distros.set_etc_timezone(tz=tz, tz_file=self._find_tz_file(tz))
