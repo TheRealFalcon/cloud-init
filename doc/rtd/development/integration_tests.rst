@@ -206,9 +206,24 @@ Customizing the launch arguments before launching an instance manually:
             client.instance.wait()
             assert client.execute("echo hello world").strip() == "hello world"
 
+Supporting new distros
+======================
+To add support for a new integration testing target:
+
+1. Add a `mapping`_ of the distro name to the default user for that distro
+2. Add `code`_ to install your test version of cloud-init.
+   For example, see `installing a debian package`_
+3. Document your new `cloud-init source`_ (if required)
+4. Provide `release info`_ so tests can be skipped on your distro
+
 .. LINKS:
 .. _tests/integration_tests/integration_settings.py: https://github.com/canonical/cloud-init/blob/main/tests/integration_tests/integration_settings.py
 .. _pycloudlib library: https://pycloudlib.readthedocs.io/en/latest/index.html
 .. _first be configured: https://pycloudlib.readthedocs.io/en/latest/configuration.html#configuration
 .. _Pytest marks: https://github.com/canonical/cloud-init/blob/af7eb1deab12c7208853c5d18b55228e0ba29c4d/tests/integration_tests/conftest.py#L220-L224
 .. _IntegrationCloud: https://github.com/canonical/cloud-init/blob/af7eb1deab12c7208853c5d18b55228e0ba29c4d/tests/integration_tests/clouds.py#L102
+.. _mapping: https://github.com/canonical/cloud-init/blob/12474d5f0edd5283fb55ca9bba813a8c6a3b6002/tests/integration_tests/clouds.py#L36
+.. _code: https://github.com/canonical/cloud-init/blob/441d8f818de7e08836f43d1b9a1a4418f341b1a5/tests/integration_tests/instances.py#L127
+.. _installing a debian package: https://github.com/canonical/cloud-init/blob/441d8f818de7e08836f43d1b9a1a4418f341b1a5/tests/integration_tests/instances.py#L182
+.. _cloud-init source: https://github.com/canonical/cloud-init/blob/441d8f818de7e08836f43d1b9a1a4418f341b1a5/tests/integration_tests/integration_settings.py#L55-L70
+.. _release info: https://github.com/canonical/cloud-init/blob/441d8f818de7e08836f43d1b9a1a4418f341b1a5/tests/integration_tests/releases.py#L85-L89
