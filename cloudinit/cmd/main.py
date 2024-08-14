@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import traceback
 import logging
 import yaml
@@ -38,6 +39,7 @@ from cloudinit.config import cc_set_hostname
 from cloudinit.config.modules import Modules
 from cloudinit.config.schema import validate_cloudconfig_schema
 from cloudinit import log
+from cloudinit.net import has_network_connection
 from cloudinit.reporting import events
 from cloudinit.settings import (
     PER_INSTANCE,
@@ -476,6 +478,17 @@ def main_init(name, args):
         # dhcp clients to advertize this hostname to any DDNS services
         # LP: #1746455.
         _maybe_set_hostname(init, stage="local", retry_stage="network")
+
+    if mode == sources.DSMODE_NETWORK:
+        # Wait until we have network connectivity before continuing
+        if init.datasource and not init.datasource.get_userdata_raw():
+            LOG.debug(
+                "Skipping network connectivity check. Datasource present "
+                "and no user data found."
+            )
+        else:
+            while not has_network_connection():
+                time.sleep(0.01)
     init.apply_network_config(bring_up=bring_up_interfaces)
 
     if mode == sources.DSMODE_LOCAL:

@@ -1404,3 +1404,15 @@ def mask_and_ipv4_to_bcast_addr(mask: str, ip: str) -> str:
 
 class RendererNotFoundError(RuntimeError):
     pass
+
+
+def has_network_connection() -> bool:
+    """Check if the instance has network connectivity.
+
+    Returns True if any candidate nic has carrier flag..
+    """
+    possible_interfaces = find_candidate_nics()
+    return any(
+        read_sys_net_int(possible_interface, "carrier") == 1
+        for possible_interface in possible_interfaces
+    )
