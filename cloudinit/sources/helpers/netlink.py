@@ -7,6 +7,7 @@ import os
 import select
 import socket
 import struct
+import time
 from collections import namedtuple
 
 from cloudinit import util
@@ -273,6 +274,7 @@ def read_netlink_messages(
     rtm_types,
     operstates,
     should_continue_callback,
+    timeout=float("inf"),
 ):
     """Reads from the netlink socket until the condition specified by
     the continuation callback is met.
@@ -282,13 +284,15 @@ def read_netlink_messages(
     :param: rtm_types: Type of netlink events to listen for.
     :param: operstates: Operational states to listen.
     :param: should_continue_callback: Specifies when to stop listening.
+    :param: timeout: Time to wait for the event to happen.
     """
     if netlink_socket is None:
         raise RuntimeError("Netlink socket is none")
     data = bytes()
     carrier = OPER_UP
     prevCarrier = OPER_UP
-    while True:
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout:
         recv_data = read_netlink_socket(netlink_socket, SELECT_TIMEOUT)
         if recv_data is None:
             continue
@@ -337,3 +341,4 @@ def read_netlink_messages(
             ):
                 return
         data = data[offset:]
+    LOG.warning("Timeout waiting for netlink events")

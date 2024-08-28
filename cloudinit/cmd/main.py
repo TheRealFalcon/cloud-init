@@ -487,8 +487,19 @@ def main_init(name, args):
                 "and no user data found."
             )
         else:
-            while not has_network_connection():
-                time.sleep(0.01)
+            from cloudinit.sources.helpers import netlink
+
+            socket = netlink.create_bound_netlink_socket()
+            netlink.read_netlink_messages(
+                netlink_socket=socket,
+                ifname_filter=None,
+                rtm_types=[netlink.RTM_NEWLINK],
+                operstates=[netlink.OPER_UP],
+                should_continue_callback=lambda *_args: False,
+                timeout=120,
+            )
+            del socket
+
     init.apply_network_config(bring_up=bring_up_interfaces)
 
     if mode == sources.DSMODE_LOCAL:
