@@ -31,7 +31,7 @@ def publish_hostkey_test_setup(tmpdir):
     }
     test_hostkey_files = []
     hostkey_tmpdir = tmpdir
-    for key_type in cc_ssh.GENERATE_KEY_NAMES:
+    for key_type in ssh_util.GENERATE_KEY_NAMES:
         filename = "ssh_host_%s_key.pub" % key_type
         filepath = os.path.join(hostkey_tmpdir, filename)
         test_hostkey_files.append(filepath)
@@ -39,7 +39,9 @@ def publish_hostkey_test_setup(tmpdir):
             f.write(" ".join(test_hostkeys[key_type]))
 
     with mock.patch.object(
-        cc_ssh, "KEY_FILE_TPL", os.path.join(hostkey_tmpdir, "ssh_host_%s_key")
+        ssh_util,
+        "KEY_FILE_TPL",
+        os.path.join(hostkey_tmpdir, "ssh_host_%s_key"),
     ):
         yield test_hostkeys, test_hostkey_files
 
@@ -123,19 +125,15 @@ class TestHandleSsh:
         m_glob.assert_called_once_with("/etc/ssh/ssh_host_*key*")
         m_fips.assert_called_once()
 
+        expected_calls = [
+            mock.call("/etc/ssh/ssh_host_rsa_key"),
+            mock.call("/etc/ssh/ssh_host_ecdsa_key"),
+        ]
         if not m_fips():
-            expected_calls = [
-                mock.call("/etc/ssh/ssh_host_rsa_key"),
-                mock.call("/etc/ssh/ssh_host_ecdsa_key"),
-                mock.call("/etc/ssh/ssh_host_ed25519_key"),
-            ]
-        else:
             # Enabled fips doesn't generate ed25519
-            expected_calls = [
-                mock.call("/etc/ssh/ssh_host_rsa_key"),
-                mock.call("/etc/ssh/ssh_host_ecdsa_key"),
-            ]
-        assert expected_calls in m_path_exists.call_args_list
+            expected_calls.append(mock.call("/etc/ssh/ssh_host_ed25519_key"))
+        for expected_call in expected_calls:
+            assert expected_call in m_path_exists.call_args_list
         assert [
             mock.call(set(keys), "root", options=options)
         ] == m_setup_keys.call_args_list
@@ -225,10 +223,10 @@ class TestHandleSsh:
     @pytest.mark.parametrize(
         "cfg, expected_key_types",
         [
-            pytest.param({}, cc_ssh.GENERATE_KEY_NAMES, id="default"),
+            pytest.param({}, ssh_util.GENERATE_KEY_NAMES, id="default"),
             pytest.param(
                 {"ssh_publish_hostkeys": {"enabled": True}},
-                cc_ssh.GENERATE_KEY_NAMES,
+                ssh_util.GENERATE_KEY_NAMES,
                 id="config_enable",
             ),
             pytest.param(
@@ -248,7 +246,7 @@ class TestHandleSsh:
             ),
             pytest.param(
                 {"ssh_publish_hostkeys": {"enabled": True, "blacklist": []}},
-                cc_ssh.GENERATE_KEY_NAMES,
+                ssh_util.GENERATE_KEY_NAMES,
                 id="empty_blacklist",
             ),
         ],
@@ -335,7 +333,7 @@ class TestHandleSsh:
         """
         m_gid.return_value = 10 if ssh_keys_group_exists else -1
         m_sshd_version.return_value = lifecycle.Version(sshd_version, 0)
-        key_path = cc_ssh.KEY_FILE_TPL % "rsa"
+        key_path = ssh_util.KEY_FILE_TPL % "rsa"
         cloud = get_cloud(distro="centos")
         cc_ssh.handle("name", {"ssh_genkeytypes": ["rsa"]}, cloud, [])
         if ssh_keys_group_exists:
@@ -372,38 +370,38 @@ class TestHandleSsh:
         else:
             sshd_conf_fname = "/etc/ssh/sshd_config"
 
-        cfg = {"ssh_keys": {}}
+        ssh_cfg = {"ssh_keys": {}}
 
         expected_calls = []
         cert_content = ""
-        for key_type in cc_ssh.GENERATE_KEY_NAMES:
-            private_name = "{}_private".format(key_type)
-            public_name = "{}_public".format(key_type)
-            cert_name = "{}_certificate".format(key_type)
+        for key_type in ssh_util.GENERATE_KEY_NAMES:
+            private_name = f"{key_type}_private"
+            public_name = f"{key_type}_public"
+            cert_name = f"{key_type}_certificate"
 
             # Actual key contents don't have to be realistic
-            private_value = "{}_PRIVATE_KEY".format(key_type)
-            public_value = "{}_PUBLIC_KEY".format(key_type)
-            cert_value = "{}_CERT_KEY".format(key_type)
+            private_value = f"{key_type}_PRIVATE_KEY"
+            public_value = f"{key_type}_PUBLIC_KEY"
+            cert_value = f"{key_type}_CERT_KEY"
 
-            cfg["ssh_keys"][private_name] = private_value
-            cfg["ssh_keys"][public_name] = public_value
-            cfg["ssh_keys"][cert_name] = cert_value
+            ssh_cfg["ssh_keys"][private_name] = private_value
+            ssh_cfg["ssh_keys"][public_name] = public_value
+            ssh_cfg["ssh_keys"][cert_name] = cert_value
 
             expected_calls.extend(
                 [
                     mock.call(
-                        "/etc/ssh/ssh_host_{}_key".format(key_type),
+                        f"/etc/ssh/ssh_host_{key_type}_key",
                         private_value,
                         0o600,
                     ),
                     mock.call(
-                        "/etc/ssh/ssh_host_{}_key.pub".format(key_type),
+                        f"/etc/ssh/ssh_host_{key_type}_key.pub",
                         public_value,
                         0o644,
                     ),
                     mock.call(
-                        "/etc/ssh/ssh_host_{}_key-cert.pub".format(key_type),
+                        f"/etc/ssh/ssh_host_{key_type}_key-cert.pub",
                         cert_value,
                         0o644,
                     ),
@@ -427,7 +425,7 @@ class TestHandleSsh:
         with mock.patch(
             MODPATH + "ssh_util.parse_ssh_config", return_value=[]
         ):
-            cc_ssh.handle("name", cfg, get_cloud(distro="ubuntu"), None)
+            cc_ssh.handle("name", ssh_cfg, get_cloud(distro="ubuntu"), [])
 
         # Check that all expected output has been done.
         for call_ in expected_calls:
@@ -474,7 +472,7 @@ class TestHandleSsh:
         with mock.patch(
             MODPATH + "ssh_util.parse_ssh_config", return_value=[]
         ):
-            cc_ssh.handle("name", cfg, get_cloud("ubuntu"), None)
+            cc_ssh.handle("name", cfg, get_cloud("ubuntu"), [])
         assert [] == m_write_file.call_args_list
         expected_log_msgs = [
             f'Skipping {reason} ssh_keys entry: "{key_type}_private"',

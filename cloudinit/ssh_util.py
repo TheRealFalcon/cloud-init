@@ -8,16 +8,20 @@
 
 import logging
 import os
+import pathlib
 import pwd
 from contextlib import suppress
-from typing import List, Sequence, Tuple
+from multiprocessing import Process
+from typing import List, NamedTuple, Sequence, Tuple
 
-from cloudinit import lifecycle, subp, util
+from cloudinit import lifecycle, performance, subp, util
 
 LOG = logging.getLogger(__name__)
 
+SSH_DIR = "/etc/ssh"
+
 # See: man sshd_config
-DEF_SSHD_CFG = "/etc/ssh/sshd_config"
+DEF_SSHD_CFG = f"{SSH_DIR}/sshd_config"
 
 # this list has been filtered out from keytypes of OpenSSH source
 # openssh-8.3p1/sshkey.c:
@@ -63,6 +67,21 @@ DISABLE_USER_OPTS = (
     ' rather than the user \\"$DISABLE_USER\\".\';echo;sleep 10;'
     "exit " + str(_DISABLE_USER_SSH_EXIT) + '"'
 )
+
+GENERATE_KEY_NAMES = ["rsa", "ecdsa", "ed25519"]
+
+KEY_NAME_TPL = "ssh_host_%s_key"
+KEY_FILE_TPL = f"{SSH_DIR}/{KEY_NAME_TPL}"
+
+
+def get_early_host_key_dir(rundir: str):
+    return pathlib.Path(rundir, "tmp_host_keys")
+
+
+class KeyPair(NamedTuple):
+    key_type: str
+    private_path: pathlib.Path
+    public_path: pathlib.Path
 
 
 class AuthKeyLine:
@@ -682,3 +701,112 @@ def get_opensshd_upstream_version():
         return upstream_version
     except (ValueError, TypeError):
         LOG.warning("Could not parse sshd version: %s", upstream_version)
+
+
+def _get_early_key_fifo(rundir: str) -> pathlib.Path:
+    return pathlib.Path(rundir, "ssh-keygen-finished")
+
+
+def _write_and_close(path: pathlib.Path, data: bytes) -> None:
+    path.write_bytes(data)
+    path.unlink()
+
+
+def _early_generate_host_keys_body(
+    rundir: str, early_key_fifo_path: pathlib.Path
+) -> None:
+    key_dir = get_early_host_key_dir(rundir)
+    key_dir.mkdir(mode=0o600, exist_ok=False)
+
+    for key_type in GENERATE_KEY_NAMES:
+        path = key_dir / (KEY_NAME_TPL % key_type)
+        stdout_path = path.with_suffix(".stdout")
+        stderr_path = path.with_suffix(".stderr")
+        with open(stdout_path, "w") as file_stdout, open(
+            stderr_path, "w"
+        ) as file_stderr:
+            try:
+                subp_stdout, subp_stderr = subp.subp(
+                    [
+                        "ssh-keygen",
+                        "-t",
+                        key_type,
+                        "-N",
+                        "",
+                        "-f",
+                        str(path),
+                    ],
+                )
+                file_stdout.write(subp_stdout)
+                file_stderr.write(subp_stderr)
+            except subp.ProcessExecutionError as e:
+                LOG.warning("Failed to generate %s host key: %s", key_type, e)
+                _write_and_close(early_key_fifo_path, b"failed")
+                return
+    _write_and_close(early_key_fifo_path, b"done")
+
+
+def _early_generate_host_keys(
+    rundir: str, early_key_fifo_path: pathlib.Path
+) -> None:
+    try:
+        _early_generate_host_keys_body(rundir, early_key_fifo_path)
+    except Exception as e:
+        LOG.warning("Failed to generate host keys: %s", e)
+        _write_and_close(early_key_fifo_path, b"failed")
+
+
+def start_early_generate_host_keys(rundir: str):
+    if all(
+        pathlib.Path(KEY_FILE_TPL % key).exists() for key in GENERATE_KEY_NAMES
+    ):
+        LOG.debug(
+            "Existing host keys present; skipping early host key generation"
+        )
+        return
+    early_key_fifo_path = _get_early_key_fifo(rundir)
+    early_key_fifo_path.parent.mkdir(mode=0o700, exist_ok=True)
+    os.mkfifo(early_key_fifo_path)
+    try:
+        Process(
+            target=_early_generate_host_keys,
+            args=(rundir, early_key_fifo_path),
+            daemon=True,
+        ).start()
+    except Exception as e:
+        LOG.warning("Failed to start early host key generation: %s", e)
+        early_key_fifo_path.unlink()
+
+
+def wait_for_early_generated_keys(rundir: str) -> List[KeyPair]:
+    early_key_fifo_path = _get_early_key_fifo(rundir)
+    if not early_key_fifo_path.exists():
+        return []
+    with performance.Timed(msg="Waiting for host key generation"):
+        resp = early_key_fifo_path.read_bytes()
+    if resp != b"done":
+        LOG.warning("Failed to retrieve early generated host keys")
+        return []
+
+    key_dir = get_early_host_key_dir(rundir)
+    keys = []
+    for key_type in GENERATE_KEY_NAMES:
+        private_path = key_dir / (KEY_NAME_TPL % key_type)
+        public_path = private_path.with_suffix(".pub")
+        if private_path.exists() and public_path.exists():
+            keys.append(KeyPair(key_type, private_path, public_path))
+        else:
+            stdout = ""
+            stderr = ""
+            with suppress(FileNotFoundError):
+                stdout = util.load_text_file(public_path / ".stdout")
+            with suppress(FileNotFoundError):
+                stderr = util.load_text_file(private_path / ".stderr")
+            LOG.warning(
+                "Failed to find generated host key pair for %s. "
+                "Stdout: %s. Stderr: %s",
+                key_type,
+                stdout,
+                stderr,
+            )
+    return keys
