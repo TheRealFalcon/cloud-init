@@ -7,11 +7,11 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 
 import logging
+import multiprocessing
 import os
 import pathlib
 import pwd
 from contextlib import suppress
-from multiprocessing import Process
 from typing import List, NamedTuple, Sequence, Tuple
 
 from cloudinit import lifecycle, performance, subp, util
@@ -713,64 +713,78 @@ def _write_and_close(path: pathlib.Path, data: bytes) -> None:
 
 
 def _early_generate_host_keys_body(
-    rundir: str, early_key_fifo_path: pathlib.Path
+    rundir: str, early_key_fifo_path: pathlib.Path, to_generate: List[str]
 ) -> None:
     key_dir = get_early_host_key_dir(rundir)
     key_dir.mkdir(mode=0o600, exist_ok=False)
 
-    for key_type in GENERATE_KEY_NAMES:
+    fifo_result = b"failed"
+    for key_type in to_generate:
         path = key_dir / (KEY_NAME_TPL % key_type)
         stdout_path = path.with_suffix(".stdout")
         stderr_path = path.with_suffix(".stderr")
-        with open(stdout_path, "w") as file_stdout, open(
-            stderr_path, "w"
-        ) as file_stderr:
-            try:
-                subp_stdout, subp_stderr = subp.subp(
-                    [
-                        "ssh-keygen",
-                        "-t",
-                        key_type,
-                        "-N",
-                        "",
-                        "-f",
-                        str(path),
-                    ],
-                )
-                file_stdout.write(subp_stdout)
-                file_stderr.write(subp_stderr)
-            except subp.ProcessExecutionError as e:
-                LOG.warning("Failed to generate %s host key: %s", key_type, e)
-                _write_and_close(early_key_fifo_path, b"failed")
-                return
-    _write_and_close(early_key_fifo_path, b"done")
-
+        try:
+            subp_stdout, subp_stderr = subp.subp(
+                [
+                    "ssh-keygen",
+                    "-t",
+                    key_type,
+                    "-N",
+                    "",
+                    "-f",
+                    str(path),
+                ],
+            )
+            if subp_stdout:
+                util.write_file(stdout_path, subp_stdout)
+            if subp_stderr:
+                util.write_file(stderr_path, subp_stderr)
+            util.write_file(stderr_path, subp_stderr)
+            fifo_result = b"done"
+        except subp.ProcessExecutionError as e:
+            LOG.warning("Failed to generate %s host key: %s", key_type, e)
+        finally:
+            _write_and_close(early_key_fifo_path, fifo_result)
 
 def _early_generate_host_keys(
-    rundir: str, early_key_fifo_path: pathlib.Path
+    rundir: str, early_key_fifo_path: pathlib.Path, to_generate: List[str]
 ) -> None:
     try:
-        _early_generate_host_keys_body(rundir, early_key_fifo_path)
+        _early_generate_host_keys_body(
+            rundir, early_key_fifo_path, to_generate
+        )
     except Exception as e:
         LOG.warning("Failed to generate host keys: %s", e)
         _write_and_close(early_key_fifo_path, b"failed")
 
 
 def start_early_generate_host_keys(rundir: str):
-    if all(
-        pathlib.Path(KEY_FILE_TPL % key).exists() for key in GENERATE_KEY_NAMES
-    ):
-        LOG.debug(
-            "Existing host keys present; skipping early host key generation"
-        )
+    # if all(
+    #     pathlib.Path(KEY_FILE_TPL % key).exists() for key in GENERATE_KEY_NAMES
+    # ):
+    #     LOG.debug(
+    #         "Existing host keys present; skipping early host key generation"
+    #     )
+    #     return
+    to_generate: List[str] = []
+    for key in GENERATE_KEY_NAMES:
+        if pathlib.Path(KEY_FILE_TPL % key).exists():
+            LOG.debug(
+                "Existing host key %s present and will not be generated",
+                key,
+            )
+        else:
+            to_generate.append(key)
+    if not to_generate:
+        LOG.debug("All host keys present. Skipping early host key generation")
         return
     early_key_fifo_path = _get_early_key_fifo(rundir)
     early_key_fifo_path.parent.mkdir(mode=0o700, exist_ok=True)
     os.mkfifo(early_key_fifo_path)
     try:
-        Process(
+        multiprocessing.Process(
             target=_early_generate_host_keys,
-            args=(rundir, early_key_fifo_path),
+            args=(rundir, early_key_fifo_path, to_generate),
             daemon=True,
         ).start()
     except Exception as e:
@@ -789,11 +803,13 @@ def wait_for_early_generated_keys(rundir: str) -> List[KeyPair]:
         return []
 
     key_dir = get_early_host_key_dir(rundir)
-    keys = []
+    keys: List[KeyPair] = []
     for key_type in GENERATE_KEY_NAMES:
         private_path = key_dir / (KEY_NAME_TPL % key_type)
         public_path = private_path.with_suffix(".pub")
-        if private_path.exists() and public_path.exists():
+        private_path_exists = private_path.exists()
+        public_path_exists = public_path.exists()
+        if private_path_exists and public_path_exists:
             keys.append(KeyPair(key_type, private_path, public_path))
         else:
             stdout = ""
@@ -802,10 +818,19 @@ def wait_for_early_generated_keys(rundir: str) -> List[KeyPair]:
                 stdout = util.load_text_file(public_path / ".stdout")
             with suppress(FileNotFoundError):
                 stderr = util.load_text_file(private_path / ".stderr")
+            private_text = (
+                "exists" if private_path_exists else "does not exist"
+            )
+            public_text = "exists" if public_path_exists else "does not exist"
             LOG.warning(
                 "Failed to find generated host key pair for %s. "
+                "%s %s. %s %s. "
                 "Stdout: %s. Stderr: %s",
                 key_type,
+                private_path,
+                private_text,
+                public_path,
+                public_text,
                 stdout,
                 stderr,
             )

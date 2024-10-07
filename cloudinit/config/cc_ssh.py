@@ -130,7 +130,7 @@ def _fetch_early_keys(
     return [key.key_type for key in early_keys]
 
 
-def _generate_public_host_keys_if_missing(
+def _generate_matching_public_keys_if_missing(
     host_keys: Mapping[str, str]
 ) -> None:
     """Generate public keys if private keys are present but not public."""
@@ -179,7 +179,7 @@ def _write_supplied_host_keys_and_certs(host_keys: Mapping[str, str]) -> None:
     if cert_config:
         ssh_util.append_ssh_config(cert_config)
 
-    _generate_public_host_keys_if_missing(host_keys)
+    _generate_matching_public_keys_if_missing(host_keys)
 
 
 def _generate_host_keys(cfg: Config, cloud: Cloud):
@@ -206,7 +206,6 @@ def _generate_host_keys(cfg: Config, cloud: Cloud):
             continue
         util.ensure_dir(os.path.dirname(keyfile))
         cmd = ["ssh-keygen", "-t", keytype, "-N", "", "-f", keyfile]
-
         # TODO(harlowja): Is this guard needed?
         with util.SeLinuxGuard(ssh_util.SSH_DIR, recursive=True):
             try:
