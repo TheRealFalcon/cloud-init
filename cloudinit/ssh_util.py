@@ -7,17 +7,21 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 
 import logging
+import multiprocessing
 import os
+import pathlib
 import pwd
 from contextlib import suppress
-from typing import List, Sequence, Tuple
+from typing import List, NamedTuple, Sequence, Tuple
 
-from cloudinit import lifecycle, subp, util
+from cloudinit import lifecycle, performance, subp, util
 
 LOG = logging.getLogger(__name__)
 
+SSH_DIR = "/etc/ssh"
+
 # See: man sshd_config
-DEF_SSHD_CFG = "/etc/ssh/sshd_config"
+DEF_SSHD_CFG = f"{SSH_DIR}/sshd_config"
 
 # this list has been filtered out from keytypes of OpenSSH source
 # openssh-8.3p1/sshkey.c:
@@ -63,6 +67,21 @@ DISABLE_USER_OPTS = (
     ' rather than the user \\"$DISABLE_USER\\".\';echo;sleep 10;'
     "exit " + str(_DISABLE_USER_SSH_EXIT) + '"'
 )
+
+GENERATE_KEY_NAMES = ["rsa", "ecdsa", "ed25519"]
+
+KEY_NAME_TPL = "ssh_host_%s_key"
+KEY_FILE_TPL = f"{SSH_DIR}/{KEY_NAME_TPL}"
+
+
+def get_early_host_key_dir(rundir: str):
+    return pathlib.Path(rundir, "tmp_host_keys")
+
+
+class KeyPair(NamedTuple):
+    key_type: str
+    private_path: pathlib.Path
+    public_path: pathlib.Path
 
 
 class AuthKeyLine:
@@ -682,3 +701,137 @@ def get_opensshd_upstream_version():
         return upstream_version
     except (ValueError, TypeError):
         LOG.warning("Could not parse sshd version: %s", upstream_version)
+
+
+def _get_early_key_fifo(rundir: str) -> pathlib.Path:
+    return pathlib.Path(rundir, "ssh-keygen-finished")
+
+
+def _write_and_close(path: pathlib.Path, data: bytes) -> None:
+    path.write_bytes(data)
+    path.unlink()
+
+
+def _early_generate_host_keys_body(
+    rundir: str, early_key_fifo_path: pathlib.Path, to_generate: List[str]
+) -> None:
+    key_dir = get_early_host_key_dir(rundir)
+    key_dir.mkdir(mode=0o600, exist_ok=False)
+
+    fifo_result = b"failed"
+    for key_type in to_generate:
+        path = key_dir / (KEY_NAME_TPL % key_type)
+        stdout_path = path.with_suffix(".stdout")
+        stderr_path = path.with_suffix(".stderr")
+        try:
+            subp_stdout, subp_stderr = subp.subp(
+                [
+                    "ssh-keygen",
+                    "-t",
+                    key_type,
+                    "-N",
+                    "",
+                    "-f",
+                    str(path),
+                ],
+            )
+            if subp_stdout:
+                util.write_file(stdout_path, subp_stdout)
+            if subp_stderr:
+                util.write_file(stderr_path, subp_stderr)
+            util.write_file(stderr_path, subp_stderr)
+            fifo_result = b"done"
+        except subp.ProcessExecutionError as e:
+            LOG.warning("Failed to generate %s host key: %s", key_type, e)
+        finally:
+            _write_and_close(early_key_fifo_path, fifo_result)
+
+def _early_generate_host_keys(
+    rundir: str, early_key_fifo_path: pathlib.Path, to_generate: List[str]
+) -> None:
+    try:
+        _early_generate_host_keys_body(
+            rundir, early_key_fifo_path, to_generate
+        )
+    except Exception as e:
+        LOG.warning("Failed to generate host keys: %s", e)
+        _write_and_close(early_key_fifo_path, b"failed")
+
+
+def start_early_generate_host_keys(rundir: str):
+    # if all(
+    #     pathlib.Path(KEY_FILE_TPL % key).exists() for key in GENERATE_KEY_NAMES
+    # ):
+    #     LOG.debug(
+    #         "Existing host keys present; skipping early host key generation"
+    #     )
+    #     return
+    to_generate: List[str] = []
+    for key in GENERATE_KEY_NAMES:
+        if pathlib.Path(KEY_FILE_TPL % key).exists():
+            LOG.debug(
+                "Existing host key %s present and will not be generated",
+                key,
+            )
+        else:
+            to_generate.append(key)
+    if not to_generate:
+        LOG.debug("All host keys present. Skipping early host key generation")
+        return
+    early_key_fifo_path = _get_early_key_fifo(rundir)
+    early_key_fifo_path.parent.mkdir(mode=0o700, exist_ok=True)
+    os.mkfifo(early_key_fifo_path)
+    try:
+        multiprocessing.Process(
+            target=_early_generate_host_keys,
+            args=(rundir, early_key_fifo_path, to_generate),
+            daemon=True,
+        ).start()
+    except Exception as e:
+        LOG.warning("Failed to start early host key generation: %s", e)
+        early_key_fifo_path.unlink()
+
+
+def wait_for_early_generated_keys(rundir: str) -> List[KeyPair]:
+    early_key_fifo_path = _get_early_key_fifo(rundir)
+    if not early_key_fifo_path.exists():
+        return []
+    with performance.Timed(msg="Waiting for host key generation"):
+        resp = early_key_fifo_path.read_bytes()
+    if resp != b"done":
+        LOG.warning("Failed to retrieve early generated host keys")
+        return []
+
+    key_dir = get_early_host_key_dir(rundir)
+    keys: List[KeyPair] = []
+    for key_type in GENERATE_KEY_NAMES:
+        private_path = key_dir / (KEY_NAME_TPL % key_type)
+        public_path = private_path.with_suffix(".pub")
+        private_path_exists = private_path.exists()
+        public_path_exists = public_path.exists()
+        if private_path_exists and public_path_exists:
+            keys.append(KeyPair(key_type, private_path, public_path))
+        else:
+            stdout = ""
+            stderr = ""
+            with suppress(FileNotFoundError):
+                stdout = util.load_text_file(public_path / ".stdout")
+            with suppress(FileNotFoundError):
+                stderr = util.load_text_file(private_path / ".stderr")
+            private_text = (
+                "exists" if private_path_exists else "does not exist"
+            )
+            public_text = "exists" if public_path_exists else "does not exist"
+            LOG.warning(
+                "Failed to find generated host key pair for %s. "
+                "%s %s. %s %s. "
+                "Stdout: %s. Stderr: %s",
+                key_type,
+                private_path,
+                private_text,
+                public_path,
+                public_text,
+                stdout,
+                stderr,
+            )
+    return keys

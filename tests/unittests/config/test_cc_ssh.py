@@ -1,13 +1,15 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 
 import logging
+import multiprocessing
 import os.path
+import threading
 from typing import Optional
 from unittest import mock
 
 import pytest
 
-from cloudinit import lifecycle, ssh_util
+from cloudinit import lifecycle, ssh_util, util
 from cloudinit.config import cc_ssh
 from cloudinit.config.schema import (
     SchemaValidationError,
@@ -31,7 +33,7 @@ def publish_hostkey_test_setup(tmpdir):
     }
     test_hostkey_files = []
     hostkey_tmpdir = tmpdir
-    for key_type in cc_ssh.GENERATE_KEY_NAMES:
+    for key_type in ssh_util.GENERATE_KEY_NAMES:
         filename = "ssh_host_%s_key.pub" % key_type
         filepath = os.path.join(hostkey_tmpdir, filename)
         test_hostkey_files.append(filepath)
@@ -39,7 +41,9 @@ def publish_hostkey_test_setup(tmpdir):
             f.write(" ".join(test_hostkeys[key_type]))
 
     with mock.patch.object(
-        cc_ssh, "KEY_FILE_TPL", os.path.join(hostkey_tmpdir, "ssh_host_%s_key")
+        ssh_util,
+        "KEY_FILE_TPL",
+        os.path.join(hostkey_tmpdir, "ssh_host_%s_key"),
     ):
         yield test_hostkeys, test_hostkey_files
 
@@ -123,19 +127,15 @@ class TestHandleSsh:
         m_glob.assert_called_once_with("/etc/ssh/ssh_host_*key*")
         m_fips.assert_called_once()
 
+        expected_calls = [
+            mock.call("/etc/ssh/ssh_host_rsa_key"),
+            mock.call("/etc/ssh/ssh_host_ecdsa_key"),
+        ]
         if not m_fips():
-            expected_calls = [
-                mock.call("/etc/ssh/ssh_host_rsa_key"),
-                mock.call("/etc/ssh/ssh_host_ecdsa_key"),
-                mock.call("/etc/ssh/ssh_host_ed25519_key"),
-            ]
-        else:
             # Enabled fips doesn't generate ed25519
-            expected_calls = [
-                mock.call("/etc/ssh/ssh_host_rsa_key"),
-                mock.call("/etc/ssh/ssh_host_ecdsa_key"),
-            ]
-        assert expected_calls in m_path_exists.call_args_list
+            expected_calls.append(mock.call("/etc/ssh/ssh_host_ed25519_key"))
+        for expected_call in expected_calls:
+            assert expected_call in m_path_exists.call_args_list
         assert [
             mock.call(set(keys), "root", options=options)
         ] == m_setup_keys.call_args_list
@@ -225,10 +225,10 @@ class TestHandleSsh:
     @pytest.mark.parametrize(
         "cfg, expected_key_types",
         [
-            pytest.param({}, cc_ssh.GENERATE_KEY_NAMES, id="default"),
+            pytest.param({}, ssh_util.GENERATE_KEY_NAMES, id="default"),
             pytest.param(
                 {"ssh_publish_hostkeys": {"enabled": True}},
-                cc_ssh.GENERATE_KEY_NAMES,
+                ssh_util.GENERATE_KEY_NAMES,
                 id="config_enable",
             ),
             pytest.param(
@@ -248,7 +248,7 @@ class TestHandleSsh:
             ),
             pytest.param(
                 {"ssh_publish_hostkeys": {"enabled": True, "blacklist": []}},
-                cc_ssh.GENERATE_KEY_NAMES,
+                ssh_util.GENERATE_KEY_NAMES,
                 id="empty_blacklist",
             ),
         ],
@@ -335,7 +335,7 @@ class TestHandleSsh:
         """
         m_gid.return_value = 10 if ssh_keys_group_exists else -1
         m_sshd_version.return_value = lifecycle.Version(sshd_version, 0)
-        key_path = cc_ssh.KEY_FILE_TPL % "rsa"
+        key_path = ssh_util.KEY_FILE_TPL % "rsa"
         cloud = get_cloud(distro="centos")
         cc_ssh.handle("name", {"ssh_genkeytypes": ["rsa"]}, cloud, [])
         if ssh_keys_group_exists:
@@ -372,38 +372,38 @@ class TestHandleSsh:
         else:
             sshd_conf_fname = "/etc/ssh/sshd_config"
 
-        cfg = {"ssh_keys": {}}
+        ssh_cfg = {"ssh_keys": {}}
 
         expected_calls = []
         cert_content = ""
-        for key_type in cc_ssh.GENERATE_KEY_NAMES:
-            private_name = "{}_private".format(key_type)
-            public_name = "{}_public".format(key_type)
-            cert_name = "{}_certificate".format(key_type)
+        for key_type in ssh_util.GENERATE_KEY_NAMES:
+            private_name = f"{key_type}_private"
+            public_name = f"{key_type}_public"
+            cert_name = f"{key_type}_certificate"
 
             # Actual key contents don't have to be realistic
-            private_value = "{}_PRIVATE_KEY".format(key_type)
-            public_value = "{}_PUBLIC_KEY".format(key_type)
-            cert_value = "{}_CERT_KEY".format(key_type)
+            private_value = f"{key_type}_PRIVATE_KEY"
+            public_value = f"{key_type}_PUBLIC_KEY"
+            cert_value = f"{key_type}_CERT_KEY"
 
-            cfg["ssh_keys"][private_name] = private_value
-            cfg["ssh_keys"][public_name] = public_value
-            cfg["ssh_keys"][cert_name] = cert_value
+            ssh_cfg["ssh_keys"][private_name] = private_value
+            ssh_cfg["ssh_keys"][public_name] = public_value
+            ssh_cfg["ssh_keys"][cert_name] = cert_value
 
             expected_calls.extend(
                 [
                     mock.call(
-                        "/etc/ssh/ssh_host_{}_key".format(key_type),
+                        f"/etc/ssh/ssh_host_{key_type}_key",
                         private_value,
                         0o600,
                     ),
                     mock.call(
-                        "/etc/ssh/ssh_host_{}_key.pub".format(key_type),
+                        f"/etc/ssh/ssh_host_{key_type}_key.pub",
                         public_value,
                         0o644,
                     ),
                     mock.call(
-                        "/etc/ssh/ssh_host_{}_key-cert.pub".format(key_type),
+                        f"/etc/ssh/ssh_host_{key_type}_key-cert.pub",
                         cert_value,
                         0o644,
                     ),
@@ -427,7 +427,7 @@ class TestHandleSsh:
         with mock.patch(
             MODPATH + "ssh_util.parse_ssh_config", return_value=[]
         ):
-            cc_ssh.handle("name", cfg, get_cloud(distro="ubuntu"), None)
+            cc_ssh.handle("name", ssh_cfg, get_cloud(distro="ubuntu"), [])
 
         # Check that all expected output has been done.
         for call_ in expected_calls:
@@ -474,7 +474,7 @@ class TestHandleSsh:
         with mock.patch(
             MODPATH + "ssh_util.parse_ssh_config", return_value=[]
         ):
-            cc_ssh.handle("name", cfg, get_cloud("ubuntu"), None)
+            cc_ssh.handle("name", cfg, get_cloud("ubuntu"), [])
         assert [] == m_write_file.call_args_list
         expected_log_msgs = [
             f'Skipping {reason} ssh_keys entry: "{key_type}_private"',
@@ -483,6 +483,233 @@ class TestHandleSsh:
         ]
         for expected_log_msg in expected_log_msgs:
             assert caplog.text.count(expected_log_msg) == 1
+
+
+@pytest.mark.usefixtures("fake_filesystem")
+class TestEarlyKeyGeneration:
+    @pytest.mark.parametrize(
+        "early_keys_present,expected_generated",
+        [
+            ([], ["rsa", "ecdsa", "ed25519"]),
+            (["rsa"], ["ecdsa", "ed25519"]),
+            (["ecdsa", "ed25519"], ["rsa"]),
+            (["rsa", "ecdsa", "ed25519"], []),
+        ],
+    )
+    def test_generate_with_early_keys_present(
+        self, early_keys_present, expected_generated, mocker
+    ):
+        """Generate a cloud-init instance with some early keys present."""
+        mocker.patch(
+            "cloudinit.config.cc_ssh.util.fips_enabled", return_value=False
+        )
+        m_subp = mocker.patch(
+            "cloudinit.config.cc_ssh.subp.subp", return_value=("", "")
+        )
+        mocker.patch(
+            "cloudinit.config.cc_ssh._fetch_early_keys",
+            return_value=early_keys_present,
+        )
+        cc_ssh._generate_host_keys({}, get_cloud("ubuntu"))
+        for key in expected_generated:
+            expected_call = mock.call(
+                [
+                    "ssh-keygen",
+                    "-t",
+                    key,
+                    "-N",
+                    "",
+                    "-f",
+                    f"/etc/ssh/ssh_host_{key}_key",
+                ],
+                capture=True,
+                update_env={"LANG": "C"},
+            )
+            assert expected_call in m_subp.call_args_list
+        assert len(m_subp.call_args_list) == len(expected_generated)
+
+    def test_fetch_early_keys(self, mocker, tmp_path):
+        """Test fetching keys that were generated in init-local."""
+        mocker.patch(
+            "cloudinit.ssh_util.KEY_FILE_TPL",
+            str(tmp_path / "DEST_ssh_host_%s_key"),
+        )
+        source_private_path = tmp_path / "rsa_path"
+        source_public_path = tmp_path / "rsa_path.pub"
+        dest_private_path = tmp_path / "DEST_ssh_host_rsa_key"
+        dest_public_path = tmp_path / "DEST_ssh_host_rsa_key.pub"
+        source_private_path.write_text("so secret")
+        source_public_path.write_text("so public")
+        mocker.patch(
+            "cloudinit.config.cc_ssh.ssh_util.wait_for_early_generated_keys",
+            return_value=[
+                ssh_util.KeyPair(
+                    "rsa", source_private_path, source_public_path
+                )
+            ],
+        )
+        key_types = cc_ssh._fetch_early_keys(["rsa"], {}, get_cloud("ubuntu"))
+        assert key_types == ["rsa"]
+        assert dest_private_path.read_text() == "so secret"
+        assert dest_public_path.read_text() == "so public"
+
+    def test_no_early_keys(self, mocker):
+        """Test that no keys are listed if none are found."""
+        mocker.patch(
+            "cloudinit.config.cc_ssh.ssh_util.wait_for_early_generated_keys",
+            return_value=[],
+        )
+        assert cc_ssh._fetch_early_keys(["rsa"], {}, get_cloud("ubuntu")) == []
+
+    def test_random_seed(self, mocker, tmp_path):
+        source_private_path = tmp_path / "rsa_path"
+        source_public_path = tmp_path / "rsa_path.pub"
+        mocker.patch(
+            "cloudinit.config.cc_ssh.ssh_util.wait_for_early_generated_keys",
+            return_value=[
+                ssh_util.KeyPair(
+                    "rsa", source_private_path, source_public_path
+                )
+            ],
+        )
+        assert (
+            cc_ssh._fetch_early_keys(
+                ["rsa"], {"random_seed": "value"}, get_cloud("ubuntu")
+            )
+            == []
+        )
+
+    def test_random_seed_in_metadata(self, mocker, tmp_path):
+        source_private_path = tmp_path / "rsa_path"
+        source_public_path = tmp_path / "rsa_path.pub"
+        mocker.patch(
+            "cloudinit.config.cc_ssh.ssh_util.wait_for_early_generated_keys",
+            return_value=[
+                ssh_util.KeyPair(
+                    "rsa", source_private_path, source_public_path
+                )
+            ],
+        )
+        cloud = get_cloud("ubuntu")
+        cloud.datasource.metadata = {"random_seed": "value"}
+        assert cc_ssh._fetch_early_keys(["rsa"], {}, cloud) == []
+
+    def test_wait_for_early_generated_keys(self, mocker, tmp_path, caplog):
+        """Test waiting for keys that were generated in init-local."""
+        fifo_path = tmp_path / "ssh-keygen-finished"
+        os.mkfifo(fifo_path)
+        t = threading.Thread(target=fifo_path.write_bytes, args=(b"done",))
+        t.start()
+
+        early_key_dir = tmp_path / "tmp_host_keys"
+        early_key_dir.mkdir()
+        private_rsa_path = early_key_dir / "ssh_host_rsa_key"
+        public_rsa_path = early_key_dir / "ssh_host_rsa_key.pub"
+        private_rsa_path.write_text("so secret")
+        public_rsa_path.write_text("so public")
+        keys = ssh_util.wait_for_early_generated_keys(tmp_path)
+        t.join()
+        assert keys == [
+            ssh_util.KeyPair("rsa", private_rsa_path, public_rsa_path)
+        ]
+        assert f"{private_rsa_path} does not exist" not in caplog.text
+        assert f"{private_rsa_path}.pub does not exist" not in caplog.text
+        assert (
+            f"{early_key_dir / 'ssh_host_ecdsa_key'} does not exist"
+            in caplog.text
+        )
+        assert (
+            f"{early_key_dir / 'ssh_host_ecdsa_key.pub'} does not exist"
+            in caplog.text
+        )
+        assert (
+            f"{early_key_dir / 'ssh_host_ed25519_key'} does not exist"
+            in caplog.text
+        )
+        assert (
+            f"{early_key_dir / 'ssh_host_ed25519_key.pub'} does not exist"
+            in caplog.text
+        )
+
+    def test_early_generated_keys_failed(self, mocker, tmp_path):
+        fifo_path = tmp_path / "ssh-keygen-finished"
+        os.mkfifo(fifo_path)
+        t = threading.Thread(target=fifo_path.write_bytes, args=(b"aaa",))
+        t.start()
+        assert ssh_util.wait_for_early_generated_keys(tmp_path) == []
+        t.join()
+
+    def test_start_early_generate_host_keys_exist(
+        self, mocker, tmp_path, caplog
+    ):
+        mocker.patch(
+            "cloudinit.ssh_util.SSH_DIR",
+            str(tmp_path / "DEST_ssh_host_%s_key"),
+        )
+        m_fifo = mocker.patch("os.mkfifo")
+        m_process = mocker.patch("multiprocessing.Process")
+        for key in ["rsa", "ecdsa", "ed25519"]:
+            (tmp_path / f"ssh_host_{key}_key").touch()
+        ssh_util.start_early_generate_host_keys(tmp_path)
+        assert "All host keys present. Skipping" in caplog.text
+        m_fifo.assert_not_called()
+        m_process.assert_not_called()
+
+    def test_start_early_generate_host_keys(self, mocker, tmp_path):
+        mocker.patch(
+            "cloudinit.ssh_util.KEY_FILE_TPL",
+            str(tmp_path / "ssh_host_%s_key"),
+        )
+        m_process = mocker.patch("multiprocessing.Process")
+        ssh_util.start_early_generate_host_keys(tmp_path)
+        assert (tmp_path / "ssh-keygen-finished").exists()
+        m_process.assert_called_once_with(
+            target=ssh_util._early_generate_host_keys,
+            args=(tmp_path, tmp_path / "ssh-keygen-finished"),
+            daemon=True,
+        )
+
+    def test_start_early_generate_host_keys_failed(
+        self, mocker, tmp_path, caplog
+    ):
+        mocker.patch(
+            "cloudinit.ssh_util.KEY_FILE_TPL",
+            str(tmp_path / "ssh_host_%s_key"),
+        )
+        mocker.patch(
+            "multiprocessing.Process", side_effect=multiprocessing.ProcessError
+        )
+        ssh_util.start_early_generate_host_keys(tmp_path)
+        assert not (tmp_path / "ssh-keygen-finished").exists()
+        assert "Failed to start early host key generation" in caplog.text
+
+    @pytest.mark.parametrize(
+        "to_generate",
+        [
+            ([]),
+            (["rsa"]),
+            (["ecdsa", "ed25519"]),
+            (["rsa", "ecdsa", "ed25519"]),
+        ],
+    )
+    def test_early_generate_host_keys(self, to_generate, mocker, tmp_path):
+        m_subp = mocker.patch(
+            "cloudinit.ssh_util.subp.subp", return_value=("", "")
+        )
+        mocker.patch("cloudinit.ssh_util._write_and_close")
+        rundir = tmp_path / "rundir"
+        rundir.mkdir()
+        ssh_util._early_generate_host_keys(rundir, tmp_path, to_generate)
+        for key in to_generate:
+            key_path = (
+                tmp_path / "rundir" / "tmp_host_keys" / f"ssh_host_{key}_key"
+            )
+            assert (
+                mock.call(
+                    ["ssh-keygen", "-t", key, "-N", "", "-f", str(key_path)]
+                )
+                in m_subp.call_args_list
+            )
 
 
 class TestSshSchema:
