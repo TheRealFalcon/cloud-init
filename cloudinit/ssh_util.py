@@ -716,9 +716,9 @@ def _early_generate_host_keys_body(
     rundir: str, early_key_fifo_path: pathlib.Path, to_generate: List[str]
 ) -> None:
     key_dir = get_early_host_key_dir(rundir)
-    key_dir.mkdir(mode=0o600, exist_ok=False)
+    key_dir.mkdir(mode=0o700, exist_ok=False)
 
-    fifo_result = b"failed"
+    fifo_result = b"done"
     for key_type in to_generate:
         path = key_dir / (KEY_NAME_TPL % key_type)
         stdout_path = path.with_suffix(".stdout")
@@ -742,9 +742,10 @@ def _early_generate_host_keys_body(
             util.write_file(stderr_path, subp_stderr)
             fifo_result = b"done"
         except subp.ProcessExecutionError as e:
+            fifo_result = b"failed"
             LOG.warning("Failed to generate %s host key: %s", key_type, e)
-        finally:
-            _write_and_close(early_key_fifo_path, fifo_result)
+    _write_and_close(early_key_fifo_path, fifo_result)
+
 
 def _early_generate_host_keys(
     rundir: str, early_key_fifo_path: pathlib.Path, to_generate: List[str]
@@ -759,13 +760,6 @@ def _early_generate_host_keys(
 
 
 def start_early_generate_host_keys(rundir: str):
-    # if all(
-    #     pathlib.Path(KEY_FILE_TPL % key).exists() for key in GENERATE_KEY_NAMES
-    # ):
-    #     LOG.debug(
-    #         "Existing host keys present; skipping early host key generation"
-    #     )
-    #     return
     to_generate: List[str] = []
     for key in GENERATE_KEY_NAMES:
         if pathlib.Path(KEY_FILE_TPL % key).exists():

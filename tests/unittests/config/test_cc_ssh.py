@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from cloudinit import lifecycle, ssh_util, util
+from cloudinit import lifecycle, ssh_util, subp, util
 from cloudinit.config import cc_ssh
 from cloudinit.config.schema import (
     SchemaValidationError,
@@ -665,7 +665,11 @@ class TestEarlyKeyGeneration:
         assert (tmp_path / "ssh-keygen-finished").exists()
         m_process.assert_called_once_with(
             target=ssh_util._early_generate_host_keys,
-            args=(tmp_path, tmp_path / "ssh-keygen-finished"),
+            args=(
+                tmp_path,
+                tmp_path / "ssh-keygen-finished",
+                ["rsa", "ecdsa", "ed25519"],
+            ),
             daemon=True,
         )
 
@@ -694,12 +698,13 @@ class TestEarlyKeyGeneration:
     )
     def test_early_generate_host_keys(self, to_generate, mocker, tmp_path):
         m_subp = mocker.patch(
-            "cloudinit.ssh_util.subp.subp", return_value=("", "")
+            "cloudinit.ssh_util.subp.subp", return_value=("stdout", "stderr")
         )
-        mocker.patch("cloudinit.ssh_util._write_and_close")
+        m_close = mocker.patch("cloudinit.ssh_util._write_and_close")
         rundir = tmp_path / "rundir"
         rundir.mkdir()
-        ssh_util._early_generate_host_keys(rundir, tmp_path, to_generate)
+        finished_path = tmp_path / "ssh-keygen-finished"
+        ssh_util._early_generate_host_keys(rundir, finished_path, to_generate)
         for key in to_generate:
             key_path = (
                 tmp_path / "rundir" / "tmp_host_keys" / f"ssh_host_{key}_key"
@@ -710,6 +715,19 @@ class TestEarlyKeyGeneration:
                 )
                 in m_subp.call_args_list
             )
+        m_close.assert_called_once_with(finished_path, b"done")
+
+    def test_early_generate_host_keys_failed(self, mocker, tmp_path):
+        mocker.patch(
+            "cloudinit.ssh_util.subp.subp",
+            side_effect=subp.ProcessExecutionError,
+        )
+        m_close = mocker.patch("cloudinit.ssh_util._write_and_close")
+        rundir = tmp_path / "rundir"
+        rundir.mkdir()
+        finished_path = tmp_path / "ssh-keygen-finished"
+        ssh_util._early_generate_host_keys(rundir, finished_path, ["rsa"])
+        m_close.assert_called_once_with(finished_path, b"failed")
 
 
 class TestSshSchema:
